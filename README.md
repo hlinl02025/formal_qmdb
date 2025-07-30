@@ -359,7 +359,7 @@ Level 64: Global root
 45. }
 ```
 
-# How QMDB can guarantee the Linked List Invariant:
+#### How QMDB can guarantee the Linked List Invariant:
 
 QMDB maintains linked list invariant, which is defined as follows:
 
@@ -372,7 +372,7 @@ entry_i.next_key_hash = entry_j.key_hash
 
 
 This invariant is maintained through:
-1. **Predicate-based insertion** ensuring correct positioning
+## 1. Predicate-based insertion ensuring correct positioning
 The key mechanism is in the `read_previous_entry` function with its predicate:
 
 ```rust
@@ -391,18 +391,18 @@ This predicate ensures:
 - `entry.key_hash() < *key_hash`: The found entry comes before the new key
 - `&key_hash[..] < entry.next_key_hash()`: The new key comes before what the entry currently points to
   
-2. **Atomic linked list updates** preserving connectivity
+## 2. Atomic linked list updates preserving connectivity
 
 For any three consecutive entries `A`, `B`, `C` in the linked list:
 
-**Before any operation:**
+### Before any operation:
 ```
 A.key_hash < B.key_hash < C.key_hash
 A.next_key_hash = B.key_hash
 B.next_key_hash = C.key_hash
 ```
 
-### **Create Operation Proof**
+### Create Operation Proof
 
 When inserting entry `X` between `A` and `B`:
 
@@ -410,7 +410,7 @@ When inserting entry `X` between `A` and `B`:
 2. **New entry creation:** `X.next_key_hash = A.next_key_hash = B.key_hash`
 3. **Previous entry update:** `A.next_key_hash = X.key_hash`
 
-**Result:**
+### Result:
 ```
 A.key_hash < X.key_hash < B.key_hash < C.key_hash
 A.next_key_hash = X.key_hash
@@ -418,29 +418,29 @@ X.next_key_hash = B.key_hash
 B.next_key_hash = C.key_hash
 ```
 
-### **Delete Operation Proof**
+### Delete Operation Proof
 
 When deleting entry `B` between `A` and `C`:
 
 1. **Save reference:** `old_next = B.next_key_hash = C.key_hash`
 2. **Update previous:** `A.next_key_hash = old_next = C.key_hash`
 
-**Result:**
+### Result:
 ```
 A.key_hash < C.key_hash
 A.next_key_hash = C.key_hash
 C.next_key_hash = D.key_hash
 ```
 
-3. **Append-only operations** preventing structural corruption
-### **A. Append-Only Design**
+## 3. Append-only operations preventing structural corruption
+### A. Append-Only Design
 
 The append-only nature ensures:
 - **No in-place modifications** that could break the linked list
 - **Immutable history** preserves the linked list structure
 - **Deactivation tracking** maintains referential integrity
 
-### **B. Atomic Operations**
+### B. Atomic Operations
 
 Each mutation operation is atomic:
 - **Create**: Two entries created (new + updated previous)
@@ -449,7 +449,7 @@ Each mutation operation is atomic:
 
 This ensures the linked list is always in a consistent state.
 
-4. **Index consistency** 
+## 4. Index consistency
 
 The index maintains consistency with the linked list:
 ```
