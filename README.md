@@ -1,120 +1,465 @@
-# QMDB's General Ideas
+#### The main Data structure of QMDB:
 
-## 1.0 In the whole history of a blockchain, how can we prove which KV pairs were created/updated at which blocks?
+## Entry Structure
 
-When a Key-Value pair is created/updated at a block of Height, we create such an Entry:
+Think of an **Entry** as a single record in a filing cabinet, but with some special properties:
 
-```text
-Entry := (Height, Key, Value, SerialNum)
+### What's Inside Each Entry:
+1. **Key** - The label or identifier (like a file name)
+2. **Value** - The actual data stored (like the file contents)
+3. **Next Key Hash** - A pointer to the next entry in alphabetical order
+4. **Version** - A timestamp showing when this entry was created
+5. **Serial Number** - A unique ID number for this entry within its section
+
+### Special Properties:
+- **Immutable**: Once written, an entry can never be changed. Instead, a new version is created.
+- **Linked**: Each entry knows which entry comes next in alphabetical order
+- **Sorted**: All entries are automatically kept in alphabetical order by their keys
+
+### Visual Example:
+```
+Entry A: Key="apple", Value="red fruit", Next="banana"
+Entry B: Key="banana", Value="yellow fruit", Next="cherry"  
+Entry C: Key="cherry", Value="red berry", Next="date"
 ```
 
-Through the history of the blockchain, we get a sequence of such entries. The SerialNum field shows an entry's postion in this sequence.
+## Twig Structure
 
-Then we build a balanced binary Merkle tree, with hash values of these entries as leaves. If the count of entries is not $2^N$, we just add null entries for padding, as is shown below \(the null entries are grey\).
+A **Twig** is like a mini filing cabinet that can hold exactly 2,048 entries. Think of it as a fixed-size container with special organization:
 
-<img src="figures/ADS_1.png" width="500">
+### What's Inside Each Twig:
+1. **Left Side (Entry Tree)**: A tree structure containing all the entry hashes
+2. **Right Side (Active Bits Tree)**: A tree structure tracking which entries are still valid
+3. **Root**: A combined hash that represents the entire twig
 
-Using the binary tree, we can prove the existence of an individual entry.
-
-Of cause, in the implementation, we do not really add null entries for padding. Instead, we only need to add a null node at each level of the binary tree, as is shown below.
-
-<img src="figures/ADS_2.png" width="500">
-
-## 2.0 How to store such a Merkle tree
-
-If we keep the whole Merkle tree in DRAM, then we can provide the proofs very fast. But unfortunately, it will cost a huge amount of DRAM so it is not feasible. A reasonable trade-off is: since the upper levels is more likely to get accessed than the lower levels, we can keep the upper levels in DRAM and the lower levels on SSD.
-
-In the current implementation of QMDB, we store the lowest 11 levels of nodes \(which correspond to 2048 entries\) on SSD, as is shown below. Such a small sub-tree with 11 levels of nodes are named as a "twig". The youngest twig \(in the read circle\) has not got all its internal nodes finalized, since the 2048 entries are not decided yet. So we buffer this youngest twig in DRAM. All the other twigs are stored on SSD.
-
-Such a Merkle tree has two parts: in-DRAM upper levels of hash nodes and in-SSD lower levels of twigs. So we name it as "Twig Merkle Tree".
-
-<img src="figures/ADS_3.png" width="500">
-
-## 3.0 How to prove a KV-pair is up-to-date? In other words, since some height H, an KV-pair is left untouched \(not changed or deleted\)
-
-An ActiveBit is attached to each entry. If ActiveBit==1, then this KV-pair is up-to-date; if ActiveBit==0, then this KV-pair has been changed or deleted after the height recorded in the entry.
-
-These ActiveBits need to be random-accessed, because an ActiveBits can be cleared to zero at any time. So we must keep all the ActiveBits in DRAM using a bit array. This bit array is indexed using an entry's SerialNum.
-
-## 4.0 Should we build a dedicated Merkle tree for these ActiveBits?
-
-Although we do want to provide Merkle proofs for individual ActiveBits, a dedicated Merkle tree for ActiveBits is not necessary. A more memory-efficient implementation is to integrate the ActiveBits into the twigs. That is, a twig contains 2048 entries and the corresponded 2048 ActiveBits.
-
-The small Merkle tree inside a twig now is made of two parts, as is shown below. The left part is a 11-level tree with 2048 entries as its leaves. And the right part is a three-level tree with 8 leaves, where each leave contains 256 ActiveBits. And the Merkle root of the entire twig, i.e. TwigRoot as is shown below, is a hash value calculated from roots of the left part and the right part.
-
-<img src="figures/ADS_4.png" width="600">
-
-## 5.0 How to prune the ActiveBits and entries?
-
-We want to keep only the recent entries whose ActiveBits equal 1, and prune the old ones to save memory. But currently we can not make sure that the old enough entries are inactive \(i.e. having their ActiveBits==0\). Actually, even the oldest entries may still be active.
-
-We have a counter measure: use redundant updates to compact the range of active entries. We fetch the oldest entries and overwrite their value using exactly the same values. Thus new entries are created and the oldest entries are deactived.
-
-The following picture shows a "redundant update" operation. Two oldest active entries \(in the two red rectangles on the left side\) are fetched out and two new entries are generated \(in the red rectangle on the right side\). Then the ActiveBits of the oldest entries are cleared to 0 and the ActiveBits and the newly-created entries are set to 1.
-
-Using this method, we can ensure the old enough entries are deactived if their SerialNums are less than a particular value. The twigs whose entries' SerialNums are all less than this particular value are refered to as "inactive twigs", or else "active twigs". an inactive twig has all its ActiveBits==0. Please note an active twig can also has all its ActiveBits==0. We say a twig is "active" only because it MAY have ActiveBits==1.
-
-<img src="ADS_5.png" width="600">
-
-## 6.0 What are the possible states of twigs
-
-We can describe a twig's status using several terms.
-
-<img src="figures/ADS_6.png" width="600">
-
-First term: "Youngest". There is only one youngest twig \(the green one in the above figure\). A youngest twig has null entries (i.e., non-finailzed ones). When all the 2048 entries are ready, it is no longer a youngest twig. Another twig with 2048 null entries will be created as the new youngest twig. Youngest twig is the only twig whose left 11-level Merkle tree is stored in DRAM. For the other twigs, the left 11-level Merkle trees are stored in SSD.
-
-Second term: "Active". The oldest active twig is the oldest twig that contains at least one active entry. All the twigs which are younger than the oldest active twig are active twigs. A youngest twig is certainly active. In the above figure, the blue and green triangles are active twigs. The active twigs use DRAM to store their right three-level Merkle trees whose leaves are the ActiveBits, such that these bits can be cleared at any time.
-
-Third term: "Pruned". The inactive twigs can be kept in SSD such that we can query about the historical KV-pairs of the blockchain. They can also be pruned if we not interested in these historical old KV-pairs. A non-pruned inactive twig is kept in SSD, and a pruned inactive twig is deleted from the SSD. In the above figure, the black triangles are non-pruned twigs and the orange triangles are pruned twigs.
-
-A twig can be in one of four possible states:
-
-1. Active and youngest
-2. Active and non-youngest
-3. Inactive and not-pruned. This states is also known as "evicted from DRAM", or "evicted" for short.
-4. Inactive and pruned
-
-## 7.0 How to provide exclusion proof? That is, we want to prove there are no other key's hash residing between hash A and hash B
-
-We need to extend entries with a NextKeyHash field:
-
-```text
-Entry := (Height, Key, NextKeyHash, Value, SerialNum)
+### Visual Structure:
+```
+Twig Root
+├── Left Root (Entry Tree Root)
+│   ├── Level 0: 2048 entry hashes (the actual data)
+│   ├── Level 1: 1024 internal nodes
+│   ├── Level 2: 512 internal nodes
+│   └── ... (up to Level 11)
+└── Right Root (Active Bits Tree Root)
+    ├── Level 8: 256 active bits (tracking valid entries)
+    ├── Level 9: 128 internal nodes
+    ├── Level 10: 64 internal nodes
+    └── Level 11: 32 internal nodes
 ```
 
-After Height, if some events happened between Key and NextKeyHash \(deletion of NextKey or insertion of a new key\), then this entry is sure to be deactived and a new entry will be created.
+### Key Concepts:
 
-## 8.0 How to proof inclusion/exclusion at any height?
+#### **Fixed Size**
+- Every twig holds exactly 2,048 entries (no more, no less)
+- When a twig fills up, a new twig is created
+- This makes the system predictable and efficient
 
-Now, using the information in entries, we can prove inclusion/exclusion at individual heights (H0, H1, .. Hn) at which the entries are written. But we can not prove at a middle height. For example, if no entry was written at H ∈ (H0, H1), how can prove inclusion/exclusion here?
+#### **Two Trees in One**
+- **Left Tree**: Stores the actual entry data in a tree structure
+- **Right Tree**: Keeps track of which entries are still "active" (not deleted)
 
-So we need to extend entries with new fields "DeactivedSerialNum0" and "DeactivedSerialNum1" (the latter is optional):
+#### **Active Bits**
+Think of active bits as a checklist:
+- Each bit represents one entry
+- `1` = entry is still valid
+- `0` = entry has been deleted or replaced
+- This allows the system to "delete" entries without actually removing them
 
-```text
-Entry := (Height, LastHeight, Key, NextKeyHash, Value, SerialNum, DeactivedSerialNum0, [DeactivedSerialNum1])
+## The Hierarchical Merkle Tree Architecture
+
+QMDB's Merkle tree is built like a **nested set of Russian dolls** - each level contains and organizes the level below it. Here's how entries and twigs fit into this hierarchy:
+
+## 1. **The Complete Tree Structure**
+
+```
+Global Root (Level 64)
+├── Shard 0 Root
+│   ├── Twig 0 Root (Level 12)
+│   ├── Twig 1 Root (Level 12)
+│   └── ... (more twigs)
+├── Shard 1 Root
+│   ├── Twig 0 Root (Level 12)
+│   └── ... (more twigs)
+└── ... (14 more shards)
 ```
 
-Every time a new entry is created and actived, one or two entries will be deactived:
+## 2. **How Entries Become Tree Leaves**
 
-1. If an KV pair gets new value, the entry of its old version is deactived. The new entry use DeactivedSerialNum0 to record the deactived old entry.
-2. If an KV pair is created, new entries must be appended: one is for this created pair and the other is an entry whose NextKeyHash is changed. Each appended entry use DeactivedSerialNum0 to record its corresponding deactived entry.
-3. If an KV pair is deleted, one entry will have its NextKeyHash changed. This entry uses DeactivedSerialNum0 and DeactivedSerialNum1 to record the deleted entry and its own corresponding old entry.
+### **Entry → Leaf Node**
+- Each **entry** becomes a **leaf node** in the Merkle tree
+- The leaf contains the **hash of the entry's data**
+- These leaves are at **Level 0** of the twig's internal tree
 
-Now we can prove an entry is created at height Ha and deactived at height Hb. So in the range (Ha, Hb], we can prove inclusion of its Key and Value and the exclusion of any keys whose hash fall in the range (hash(Key), NextKeyHash).
+```
+Entry: Key="apple", Value="red fruit", Next="banana", Version=100, SN=42
+    ↓ (hash the entry)
+Leaf Node: Hash(entry_data) = 0x1234...abcd
+```
 
-## 9.0  How to query a KV pair fast?
+### **Visual Example of Entry to Leaf:**
+```
+Entry A → Leaf 0: Hash("apple|red fruit|banana|100|42")
+Entry B → Leaf 1: Hash("banana|yellow fruit|cherry|101|43")  
+Entry C → Leaf 2: Hash("cherry|red berry|date|102|44")
+...
+Entry 2047 → Leaf 2047: Hash("zebra|striped animal|end|1247|2289")
+```
 
-We can build an ordered map, which maps a `(hash(key), height)` tuple to a 64-bit integer, which is the offset of the entry in file.
+## 3. **How Twigs Organize Entries**
 
-This index must support iterator, so hash maps do not work. We must use some tree structure, such as red-black tree \(in DRAM\), B/B+ tree \(in DRAM or in disk\), LSM tree \(in disk\). To balance speed and memory consumption, we use B-tree in DRAM to index the latest keys.
+### **Twig as a Mini Merkle Tree**
+Each twig is a **complete binary Merkle tree** with exactly 2,048 leaves:
 
-## 10.0 How to prune the inactive twigs from SSD?
+```
+Twig Root (Level 11)
+├── Left Root (Level 10)
+│   ├── Level 9: 512 nodes
+│   ├── Level 8: 256 nodes
+│   ├── Level 7: 128 nodes
+│   ├── Level 6: 64 nodes
+│   ├── Level 5: 32 nodes
+│   ├── Level 4: 16 nodes
+│   ├── Level 3: 8 nodes
+│   ├── Level 2: 4 nodes
+│   ├── Level 1: 2 nodes
+│   └── Level 0: 2048 leaves (the entries!)
+└── Right Root (Active Bits Tree)
+    ├── Level 8: 256 active bits
+    ├── Level 9: 128 nodes
+    ├── Level 10: 64 nodes
+    └── Level 11: 32 nodes
+```
 
-A block at height H can create one or more entries. The ID of the oldest active twig seen by it is denoted as OldestActiveTwig\(H\). When we do not need to query the information about the blocks older than H, we can prune the twigs that are older than OldestActiveTwig\(H\).
+### **The Two-Tree Structure Within Each Twig**
 
-Filesystem does not support truncate a file from the beginning to a middle point. So we must use a series of fixed-size small files to simulate one large file. Pruning from the beginning is deleting the first several small files. We name such a virtual large file as "head-prunable" file.
+#### **Left Tree (Entry Tree)**
+- Contains the actual entry data
+- Each leaf is the hash of an entry
+- Internal nodes are hashes of their children
 
-The content of twigs are seperated and store in two head-prunable files: one for the leaves, i.ie. the entries, and the other for the left 11-level Merkle tree. What about the right three-level Merkle tree? Well, for the inactive twigs, all the ActiveBits are zero, so the right three-level Merkle trees all have the same value.
+#### **Right Tree (Active Bits Tree)**
+- Tracks which entries are still valid
+- Each leaf represents 8 entries (1 bit per entry)
+- Allows "deletion" without actually removing data
 
-The left 11-level Merkle trees occupies fixed-length bytes on disk. So it is easy to calculate any node's offset in file.
+## 4. **How Twigs Connect to Higher Levels**
+
+### **Twig Roots Become Leaves**
+Each twig's root becomes a **leaf node** in the next level up:
+
+```
+Twig 0 Root → Leaf in Shard Tree
+Twig 1 Root → Leaf in Shard Tree
+Twig 2 Root → Leaf in Shard Tree
+...
+```
+
+### **Shard Level Organization**
+```
+Shard Root (Level 13+)
+├── Twig 0 Root (from Level 12)
+├── Twig 1 Root (from Level 12)
+├── Twig 2 Root (from Level 12)
+└── ... (more twig roots)
+```
+
+## 5. **The Complete Data Flow**
+
+### **From Entry to Global Root:**
+```
+1. Entry Data → Hash → Leaf Node (Level 0)
+2. 2048 Leaf Nodes → Hash → Internal Nodes (Levels 1-10)
+3. Left Tree Root + Right Tree Root → Hash → Twig Root (Level 11)
+4. Twig Root → Leaf → Shard Tree (Level 12+)
+5. Shard Roots → Hash → Global Root (Level 64)
+```
+
+### **Visual Example:**
+```
+Entry "apple" → Hash → Leaf 0
+    ↓ (with 2047 other entries)
+Twig 0 Left Root
+    ↓ (combined with Active Bits Root)
+Twig 0 Root
+    ↓ (with other twig roots)
+Shard 0 Root
+    ↓ (with other shard roots)
+Global Root
+```
+
+## 6. **Key Relationships and Properties**
+
+### **Entry Properties in the Tree:**
+- **Position**: Each entry has a fixed position in its twig (0-2047)
+- **Serial Number**: Unique identifier within the shard
+- **Hash**: The entry's data is hashed to create the leaf node
+- **Ordering**: Entries are sorted by key hash within each twig
+
+### **Twig Properties in the Tree:**
+- **Fixed Size**: Always exactly 2,048 entries
+- **Independent**: Each twig can be processed separately
+- **Verifiable**: The twig root proves the integrity of all its entries
+- **Updatable**: Only the current twig (youngest) can be modified
+
+### **Tree Level Relationships:**
+```
+Level 0: Entry hashes (2,048 per twig)
+Level 1-10: Internal nodes of entry tree
+Level 11: Twig roots
+Level 12+: Shard tree nodes
+Level 64: Global root
+```
+#### The core algorithms of QMDB:
+## Algorithm 1: CREATE-KV
+
+**Input:** `read_entry_buf`, `key_hash`, `key`, `value`, `shard_id`, `version`, `serial_number`, `r`
+
+**Output:** `EntryMutationResult`
+
+```
+1.  ASSERT value ≠ ∅
+2.  height ← split_task_id(version).height
+3.  
+4.  // Find previous entry in sorted key space
+5.  old_pos ← storage.read_previous_entry(height, key_hash, read_entry_buf, 
+6.      predicate: entry.key_hash < key_hash ∧ key_hash < entry.next_key_hash)
+7.  prev_entry ← read_entry_buf.as_entry_bz()
+8.  inspector.on_read_entry(prev_entry)
+9.  
+10. // Create new entry inheriting next pointer
+11. new_entry ← Entry {
+12.     key: key,
+13.     value: value,
+14.     next_key_hash: prev_entry.next_key_hash(),
+15.     version: version,
+16.     serial_number: serial_number
+17. }
+18. dsn_list ← ∅
+19. create_pos ← storage.append_entry(new_entry, dsn_list)
+20. inspector.on_append_entry(new_entry)
+21. 
+22. // Update previous entry to point to new entry
+23. inspector.on_deactivate_entry(prev_entry)
+24. prev_changed ← Entry {
+25.     key: prev_entry.key(),
+26.     value: prev_entry.value(),
+27.     next_key_hash: key_hash,
+28.     version: version,
+29.     serial_number: serial_number + 1
+30. }
+31. dsn_list ← [prev_entry.serial_number()]
+32. new_pos ← storage.append_entry(prev_changed, dsn_list)
+33. inspector.on_append_entry(prev_changed)
+34. 
+35. // Update indices
+36. indexer.add_kv(key_hash, create_pos, serial_number)
+37. indexer.change_kv(prev_entry.key_hash[0:10], old_pos, new_pos, 
+38.     prev_entry.serial_number(), serial_number + 1)
+39. 
+40. storage.try_twice_compact()
+41. 
+42. RETURN EntryMutationResult {
+43.     num_active: 2,
+44.     num_deactive: 1
+45. }
+```
+
+## Algorithm 2: UPDATE-KV
+
+**Input:** `read_entry_buf`, `key_hash`, `key`, `value`, `shard_id`, `version`, `serial_number`, `r`
+
+**Output:** `EntryMutationResult`
+
+```
+1.  ASSERT value ≠ ∅
+2.  height ← split_task_id(version).height
+3.  
+4.  // Find existing entry to update
+5.  old_pos ← storage.read_prior_entry(height, key_hash, read_entry_buf,
+6.      predicate: entry.key == key)
+7.  old_entry ← read_entry_buf.as_entry_bz()
+8.  inspector.on_read_entry(old_entry)
+9.  
+10. // Deactivate old entry and create updated version
+11. inspector.on_deactivate_entry(old_entry)
+12. new_entry ← Entry {
+13.     key: key,
+14.     value: value,
+15.     next_key_hash: old_entry.next_key_hash(),
+16.     version: version,
+17.     serial_number: serial_number
+18. }
+19. dsn_list ← [old_entry.serial_number()]
+20. new_pos ← storage.append_entry(new_entry, dsn_list)
+21. inspector.on_append_entry(new_entry)
+22. 
+23. // Update index to reflect new position
+24. indexer.change_kv(key_hash, old_pos, new_pos,
+25.     old_entry.serial_number(), serial_number)
+26. 
+27. storage.try_twice_compact()
+28. 
+29. RETURN EntryMutationResult {
+30.     num_active: 1,
+31.     num_deactive: 1
+32. }
+```
+
+## Algorithm 3: DELETE-KV
+
+**Input:** `read_entry_buf`, `key_hash`, `key`, `shard_id`, `version`, `serial_number`, `r`
+
+**Output:** `EntryMutationResult`
+
+```
+1.  height ← split_task_id(version).height
+2.  
+3.  // Find entry to delete
+4.  del_entry_pos ← storage.read_prior_entry(height, key_hash, read_entry_buf,
+5.      predicate: entry.key == key)
+6.  del_entry ← read_entry_buf.as_entry_bz()
+7.  inspector.on_read_entry(del_entry)
+8.  del_entry_sn ← del_entry.serial_number()
+9.  old_next_key_hash ← del_entry.next_key_hash()
+10. 
+11. // Deactivate entry to delete
+12. inspector.on_deactivate_entry(del_entry)
+13. 
+14. // Find previous entry in linked list
+15. read_entry_buf.clear()
+16. prev_pos ← storage.read_previous_entry(height, key_hash, read_entry_buf,
+17.     predicate: entry.next_key_hash == key_hash)
+18. prev_entry ← read_entry_buf.as_entry_bz()
+19. inspector.on_read_entry(prev_entry)
+20. inspector.on_deactivate_entry(prev_entry)
+21. 
+22. // Update previous entry to skip deleted entry
+23. prev_changed ← Entry {
+24.     key: prev_entry.key(),
+25.     value: prev_entry.value(),
+26.     next_key_hash: old_next_key_hash,
+27.     version: version,
+28.     serial_number: serial_number
+29. }
+30. dsn_list ← [del_entry_sn, prev_entry.serial_number()]
+31. new_pos ← storage.append_entry(prev_changed, dsn_list)
+32. inspector.on_append_entry(prev_changed)
+33. 
+34. // Update indices
+35. indexer.erase_kv(key_hash, del_entry_pos, del_entry_sn)
+36. k80 ← prev_entry.key_hash[0:10]
+37. indexer.change_kv(k80, prev_pos, new_pos,
+38.     prev_entry.serial_number(), serial_number)
+39. 
+40. storage.try_twice_compact()
+41. 
+42. RETURN EntryMutationResult {
+43.     num_active: 1,
+44.     num_deactive: 2
+45. }
+```
+
+# How QMDB can guarantee the Linked List Invariant:
+
+QMDB maintains linked list invariant, which is defined as follows:
+
+QMDB maintains a sorted linked list where each entry contains a `next_key_hash` field that points to the next entry in lexicographic order. The invariant states:
+
+```
+∀ entry_i, entry_j: entry_i.key_hash < entry_j.key_hash ⟹ 
+entry_i.next_key_hash = entry_j.key_hash
+```
+
+
+This invariant is maintained through:
+1. **Predicate-based insertion** ensuring correct positioning
+The key mechanism is in the `read_previous_entry` function with its predicate:
+
+```rust
+// In create_kv function
+let old_pos = self.storage.read_previous_entry(
+    height, 
+    key_hash, 
+    read_entry_buf, 
+    |entry| {
+        entry.key_hash() < *key_hash && &key_hash[..] < entry.next_key_hash()
+    }
+);
+```
+
+This predicate ensures:
+- `entry.key_hash() < *key_hash`: The found entry comes before the new key
+- `&key_hash[..] < entry.next_key_hash()`: The new key comes before what the entry currently points to
+  
+2. **Atomic linked list updates** preserving connectivity
+
+For any three consecutive entries `A`, `B`, `C` in the linked list:
+
+**Before any operation:**
+```
+A.key_hash < B.key_hash < C.key_hash
+A.next_key_hash = B.key_hash
+B.next_key_hash = C.key_hash
+```
+
+### **Create Operation Proof**
+
+When inserting entry `X` between `A` and `B`:
+
+1. **Predicate ensures:** `A.key_hash < X.key_hash < B.key_hash`
+2. **New entry creation:** `X.next_key_hash = A.next_key_hash = B.key_hash`
+3. **Previous entry update:** `A.next_key_hash = X.key_hash`
+
+**Result:**
+```
+A.key_hash < X.key_hash < B.key_hash < C.key_hash
+A.next_key_hash = X.key_hash
+X.next_key_hash = B.key_hash
+B.next_key_hash = C.key_hash
+```
+
+### **Delete Operation Proof**
+
+When deleting entry `B` between `A` and `C`:
+
+1. **Save reference:** `old_next = B.next_key_hash = C.key_hash`
+2. **Update previous:** `A.next_key_hash = old_next = C.key_hash`
+
+**Result:**
+```
+A.key_hash < C.key_hash
+A.next_key_hash = C.key_hash
+C.next_key_hash = D.key_hash
+```
+
+3. **Append-only operations** preventing structural corruption
+### **A. Append-Only Design**
+
+The append-only nature ensures:
+- **No in-place modifications** that could break the linked list
+- **Immutable history** preserves the linked list structure
+- **Deactivation tracking** maintains referential integrity
+
+### **B. Atomic Operations**
+
+Each mutation operation is atomic:
+- **Create**: Two entries created (new + updated previous)
+- **Delete**: One entry created (updated previous)
+- **Update**: One entry created (updated version)
+
+This ensures the linked list is always in a consistent state.
+
+4. **Index consistency** 
+
+The index maintains consistency with the linked list:
+```
+self.indexer.add_kv(&key_hash[..], create_pos, serial_number);
+self.indexer.change_kv(
+    &prev_entry.key_hash()[..10],
+    old_pos,
+    new_pos,
+    prev_entry.serial_number(),
+    serial_number + 1,
+);
+```
+The indices are updated to reflect the new positions in time. 
