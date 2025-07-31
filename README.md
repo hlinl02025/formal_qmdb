@@ -1,15 +1,16 @@
-#### The main Data structure of QMDB:
+# 1. The main Data structure of QMDB:
 
-## Entry Structure
+## 1.1 Entry Structure
 
 Think of an **Entry** as a single record in a filing cabinet, but with some special properties:
 
 ### What's Inside Each Entry:
-1. **Key** - The label or identifier (like a file name)
-2. **Value** - The actual data stored (like the file contents)
+1. **Key** - The label or identifier
+2. **Value** - The actual data stored
 3. **Next Key Hash** - A pointer to the next entry in alphabetical order
-4. **Version** - A timestamp showing when this entry was created
+4. **Version** - A unique identifier for the transaction that created or modified the entry
 5. **Serial Number** - A unique ID number for this entry within its section
+6. **dsn_list** - A list of Deactivated serial numbers
 
 ### Special Properties:
 - **Immutable**: Once written, an entry can never be changed. Instead, a new version is created.
@@ -18,12 +19,12 @@ Think of an **Entry** as a single record in a filing cabinet, but with some spec
 
 ### Visual Example:
 ```
-Entry A: Key="apple", Value="red fruit", Next="banana"
-Entry B: Key="banana", Value="yellow fruit", Next="cherry"  
-Entry C: Key="cherry", Value="red berry", Next="date"
+Entry A: Key="apple", Value="red fruit", Next="0x1d3w"
+Entry B: Key="banana", Value="yellow fruit", Next="0x1r36"  
+Entry C: Key="cherry", Value="red berry", Next="0x12fe"
 ```
 
-## Twig Structure
+## 1.2 Twig Structure
 
 A **Twig** is like a mini filing cabinet that can hold exactly 2,048 entries. Think of it as a fixed-size container with special organization:
 
@@ -33,19 +34,20 @@ A **Twig** is like a mini filing cabinet that can hold exactly 2,048 entries. Th
 3. **Root**: A combined hash that represents the entire twig
 
 ### Visual Structure:
+
+```plaintext
+                             TwigRoot
+                                |
+                ┌───────────────┴───────────────┐
+                │                               │
+           Left Root                       Right Root
+         (Entry Tree)                  (Active Bits Tree)
+                │                               │
+         [11-level binary tree]         [3-level binary tree]
+                │                               │
+      2048 Entry Hashes (leaves)      8 leaves × 256 ActiveBits
 ```
-Twig Root
-├── Left Root (Entry Tree Root)
-│   ├── Level 0: 2048 entry hashes (the actual data)
-│   ├── Level 1: 1024 internal nodes
-│   ├── Level 2: 512 internal nodes
-│   └── ... (up to Level 11)
-└── Right Root (Active Bits Tree Root)
-    ├── Level 8: 256 active bits (tracking valid entries)
-    ├── Level 9: 128 internal nodes
-    ├── Level 10: 64 internal nodes
-    └── Level 11: 32 internal nodes
-```
+
 
 ### Key Concepts:
 
@@ -65,11 +67,11 @@ Think of active bits as a checklist:
 - `0` = entry has been deleted or replaced
 - This allows the system to "delete" entries without actually removing them
 
-## The Hierarchical Merkle Tree Architecture
+# 2. The Hierarchical Merkle Tree Architecture
 
 QMDB's Merkle tree is built like a **nested set of Russian dolls** - each level contains and organizes the level below it. Here's how entries and twigs fit into this hierarchy:
 
-## 1. **The Complete Tree Structure**
+## 2.1. **The Complete Tree Structure**
 
 ```
 Global Root (Level 64)
@@ -83,7 +85,7 @@ Global Root (Level 64)
 └── ... (14 more shards)
 ```
 
-## 2. **How Entries Become Tree Leaves**
+## 2.2. **How Entries Become Tree Leaves**
 
 ### **Entry → Leaf Node**
 - Each **entry** becomes a **leaf node** in the Merkle tree
@@ -91,7 +93,7 @@ Global Root (Level 64)
 - These leaves are at **Level 0** of the twig's internal tree
 
 ```
-Entry: Key="apple", Value="red fruit", Next="banana", Version=100, SN=42
+Entry: Key="apple", Value="red fruit", Next="0xa9823", Version=100, SN=42
     ↓ (hash the entry)
 Leaf Node: Hash(entry_data) = 0x1234...abcd
 ```
@@ -105,30 +107,11 @@ Entry C → Leaf 2: Hash("cherry|red berry|date|102|44")
 Entry 2047 → Leaf 2047: Hash("zebra|striped animal|end|1247|2289")
 ```
 
-## 3. **How Twigs Organize Entries**
+## 2.3. **How Twigs Organize Entries**
 
 ### **Twig as a Mini Merkle Tree**
-Each twig is a **complete binary Merkle tree** with exactly 2,048 leaves:
 
-```
-Twig Root (Level 11)
-├── Left Root (Level 10)
-│   ├── Level 9: 512 nodes
-│   ├── Level 8: 256 nodes
-│   ├── Level 7: 128 nodes
-│   ├── Level 6: 64 nodes
-│   ├── Level 5: 32 nodes
-│   ├── Level 4: 16 nodes
-│   ├── Level 3: 8 nodes
-│   ├── Level 2: 4 nodes
-│   ├── Level 1: 2 nodes
-│   └── Level 0: 2048 leaves (the entries!)
-└── Right Root (Active Bits Tree)
-    ├── Level 8: 256 active bits
-    ├── Level 9: 128 nodes
-    ├── Level 10: 64 nodes
-    └── Level 11: 32 nodes
-```
+The concrete visual structure of Twig as a Mini Merkle Tree can be found in the previous section on the Data Structure of QMDB. 
 
 ### **The Two-Tree Structure Within Each Twig**
 
@@ -142,7 +125,7 @@ Twig Root (Level 11)
 - Each leaf represents 8 entries (1 bit per entry)
 - Allows "deletion" without actually removing data
 
-## 4. **How Twigs Connect to Higher Levels**
+## 2.4. **How Twigs Connect to Higher Levels**
 
 ### **Twig Roots Become Leaves**
 Each twig's root becomes a **leaf node** in the next level up:
@@ -163,7 +146,7 @@ Shard Root (Level 13+)
 └── ... (more twig roots)
 ```
 
-## 5. **The Complete Data Flow**
+## 2.5. **The Complete Data Flow**
 
 ### **From Entry to Global Root:**
 ```
@@ -171,7 +154,7 @@ Shard Root (Level 13+)
 2. 2048 Leaf Nodes → Hash → Internal Nodes (Levels 1-10)
 3. Left Tree Root + Right Tree Root → Hash → Twig Root (Level 11)
 4. Twig Root → Leaf → Shard Tree (Level 12+)
-5. Shard Roots → Hash → Global Root (Level 64)
+5. Shard Roots → Global Root (Level 64)
 ```
 
 ### **Visual Example:**
@@ -187,19 +170,18 @@ Shard 0 Root
 Global Root
 ```
 
-## 6. **Key Relationships and Properties**
+## 2.6. **Key Relationships and Properties**
 
 ### **Entry Properties in the Tree:**
 - **Position**: Each entry has a fixed position in its twig (0-2047)
 - **Serial Number**: Unique identifier within the shard
 - **Hash**: The entry's data is hashed to create the leaf node
-- **Ordering**: Entries are sorted by key hash within each twig
 
 ### **Twig Properties in the Tree:**
 - **Fixed Size**: Always exactly 2,048 entries
 - **Independent**: Each twig can be processed separately
 - **Verifiable**: The twig root proves the integrity of all its entries
-- **Updatable**: Only the current twig (youngest) can be modified
+- **Updatable**: Only the current twig (youngest) and old twigs' right trees can be modified
 
 ### **Tree Level Relationships:**
 ```
@@ -209,9 +191,10 @@ Level 11: Twig roots
 Level 12+: Shard tree nodes
 Level 64: Global root
 ```
-#### The core algorithms of QMDB:
+# 3. The core algorithms of QMDB:
 
-There are mainly three algorithms: CREATE-KV, UPDATE-KV and DELETE-KV
+There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and TRY-TWICE-COMPACT. The following are the pseudocodes of these algorithms. 
+
 
 ## Algorithm 1: CREATE-KV
 
@@ -227,44 +210,40 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV and DELETE-KV
 5.  old_pos ← storage.read_previous_entry(height, key_hash, read_entry_buf, 
 6.      predicate: entry.key_hash < key_hash ∧ key_hash < entry.next_key_hash)
 7.  prev_entry ← read_entry_buf.as_entry_bz()
-8.  inspector.on_read_entry(prev_entry)
-9.  
-10. // Create new entry inheriting next pointer
-11. new_entry ← Entry {
-12.     key: key,
-13.     value: value,
-14.     next_key_hash: prev_entry.next_key_hash(),
-15.     version: version,
-16.     serial_number: serial_number
-17. }
-18. dsn_list ← ∅
-19. create_pos ← storage.append_entry(new_entry, dsn_list)
-20. inspector.on_append_entry(new_entry)
-21. 
-22. // Update previous entry to point to new entry
-23. inspector.on_deactivate_entry(prev_entry)
-24. prev_changed ← Entry {
-25.     key: prev_entry.key(),
-26.     value: prev_entry.value(),
-27.     next_key_hash: key_hash,
-28.     version: version,
-29.     serial_number: serial_number + 1
-30. }
-31. dsn_list ← [prev_entry.serial_number()]
-32. new_pos ← storage.append_entry(prev_changed, dsn_list)
-33. inspector.on_append_entry(prev_changed)
-34. 
-35. // Update indices
-36. indexer.add_kv(key_hash, create_pos, serial_number)
-37. indexer.change_kv(prev_entry.key_hash[0:10], old_pos, new_pos, 
-38.     prev_entry.serial_number(), serial_number + 1)
-39. 
-40. storage.try_twice_compact()
-41. 
-42. RETURN EntryMutationResult {
-43.     num_active: 2,
-44.     num_deactive: 1
-45. }
+8.  
+9.  // Create new entry inheriting next pointer
+10. new_entry ← Entry {
+11.     key: key,
+12.     value: value,
+13.     next_key_hash: prev_entry.next_key_hash(),
+14.     version: version,
+15.     serial_number: serial_number
+16. }
+17. dsn_list ← ∅
+18. create_pos ← storage.append_entry(new_entry, dsn_list)
+19. 
+20. // Update previous entry to point to new entry
+21. prev_changed ← Entry {
+22.     key: prev_entry.key(),
+23.     value: prev_entry.value(),
+24.     next_key_hash: key_hash,
+25.     version: version,
+26.     serial_number: serial_number + 1
+27. }
+28. dsn_list ← [prev_entry.serial_number()]
+29. new_pos ← storage.append_entry(prev_changed, dsn_list)
+30. 
+31. // Update entry position mappings
+32. add_entry_position(key_hash, create_pos, serial_number)
+33. update_entry_position(prev_entry.key_hash[0:10], old_pos, new_pos, 
+34.     prev_entry.serial_number(), serial_number + 1)
+35. 
+36. storage.try_twice_compact()
+37. 
+38. RETURN EntryMutationResult {
+39.     num_active: 2,
+40.     num_deactive: 1
+41. }
 ```
 
 ## Algorithm 2: UPDATE-KV
@@ -281,31 +260,28 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV and DELETE-KV
 5.  old_pos ← storage.read_prior_entry(height, key_hash, read_entry_buf,
 6.      predicate: entry.key == key)
 7.  old_entry ← read_entry_buf.as_entry_bz()
-8.  inspector.on_read_entry(old_entry)
-9.  
-10. // Deactivate old entry and create updated version
-11. inspector.on_deactivate_entry(old_entry)
-12. new_entry ← Entry {
-13.     key: key,
-14.     value: value,
-15.     next_key_hash: old_entry.next_key_hash(),
-16.     version: version,
-17.     serial_number: serial_number
-18. }
-19. dsn_list ← [old_entry.serial_number()]
-20. new_pos ← storage.append_entry(new_entry, dsn_list)
-21. inspector.on_append_entry(new_entry)
-22. 
-23. // Update index to reflect new position
-24. indexer.change_kv(key_hash, old_pos, new_pos,
-25.     old_entry.serial_number(), serial_number)
-26. 
-27. storage.try_twice_compact()
-28. 
-29. RETURN EntryMutationResult {
-30.     num_active: 1,
-31.     num_deactive: 1
-32. }
+8.  
+9.  // Create updated version
+10. new_entry ← Entry {
+11.     key: key,
+12.     value: value,
+13.     next_key_hash: old_entry.next_key_hash(),
+14.     version: version,
+15.     serial_number: serial_number
+16. }
+17. dsn_list ← [old_entry.serial_number()]
+18. new_pos ← storage.append_entry(new_entry, dsn_list)
+19. 
+20. // Update entry position mapping
+21. update_entry_position(key_hash, old_pos, new_pos,
+22.     old_entry.serial_number(), serial_number)
+23. 
+24. storage.try_twice_compact()
+25. 
+26. RETURN EntryMutationResult {
+27.     num_active: 1,
+28.     num_deactive: 1
+29. }
 ```
 
 ## Algorithm 3: DELETE-KV
@@ -321,48 +297,146 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV and DELETE-KV
 4.  del_entry_pos ← storage.read_prior_entry(height, key_hash, read_entry_buf,
 5.      predicate: entry.key == key)
 6.  del_entry ← read_entry_buf.as_entry_bz()
-7.  inspector.on_read_entry(del_entry)
-8.  del_entry_sn ← del_entry.serial_number()
-9.  old_next_key_hash ← del_entry.next_key_hash()
-10. 
-11. // Deactivate entry to delete
-12. inspector.on_deactivate_entry(del_entry)
-13. 
-14. // Find previous entry in linked list
-15. read_entry_buf.clear()
-16. prev_pos ← storage.read_previous_entry(height, key_hash, read_entry_buf,
-17.     predicate: entry.next_key_hash == key_hash)
-18. prev_entry ← read_entry_buf.as_entry_bz()
-19. inspector.on_read_entry(prev_entry)
-20. inspector.on_deactivate_entry(prev_entry)
-21. 
-22. // Update previous entry to skip deleted entry
-23. prev_changed ← Entry {
-24.     key: prev_entry.key(),
-25.     value: prev_entry.value(),
-26.     next_key_hash: old_next_key_hash,
-27.     version: version,
-28.     serial_number: serial_number
-29. }
-30. dsn_list ← [del_entry_sn, prev_entry.serial_number()]
-31. new_pos ← storage.append_entry(prev_changed, dsn_list)
-32. inspector.on_append_entry(prev_changed)
-33. 
-34. // Update indices
-35. indexer.erase_kv(key_hash, del_entry_pos, del_entry_sn)
-36. k80 ← prev_entry.key_hash[0:10]
-37. indexer.change_kv(k80, prev_pos, new_pos,
-38.     prev_entry.serial_number(), serial_number)
-39. 
-40. storage.try_twice_compact()
-41. 
-42. RETURN EntryMutationResult {
-43.     num_active: 1,
-44.     num_deactive: 2
-45. }
+7.  del_entry_sn ← del_entry.serial_number()
+8.  old_next_key_hash ← del_entry.next_key_hash()
+9. 
+10. // Find previous entry in linked list
+11. read_entry_buf.clear()
+12. prev_pos ← storage.read_previous_entry(height, key_hash, read_entry_buf,
+13.     predicate: entry.next_key_hash == key_hash)
+14. prev_entry ← read_entry_buf.as_entry_bz()
+15. 
+16. // Update previous entry to skip deleted entry
+17. prev_changed ← Entry {
+18.     key: prev_entry.key(),
+19.     value: prev_entry.value(),
+20.     next_key_hash: old_next_key_hash,
+21.     version: version,
+22.     serial_number: serial_number
+23. }
+24. dsn_list ← [del_entry_sn, prev_entry.serial_number()]
+25. new_pos ← storage.append_entry(prev_changed, dsn_list)
+26. 
+27. // Update entry position mappings
+28. remove_entry_position(key_hash, del_entry_pos, del_entry_sn)
+29. k80 ← prev_entry.key_hash[0:10]
+30. update_entry_position(k80, prev_pos, new_pos,
+31.     prev_entry.serial_number(), serial_number)
+32. 
+33. storage.try_twice_compact()
+34. 
+35. RETURN EntryMutationResult {
+36.     num_active: 1,
+37.     num_deactive: 2
+38. }
 ```
 
-#### How QMDB can guarantee the Linked List Invariant:
+## Algorithm 4: TRY-TWICE-COMPACT
+
+**Input:** `ebw` (Entry Buffer Writer Guard), `r` (Optional Operation Record)
+
+**Output:** None (void function)
+
+```
+1.  // Check if compaction should be triggered
+2.  IF is_compactible() THEN
+3.      // Perform first compaction pass
+4.      compact(ebw, r, 0)
+5.      // Perform second compaction pass
+6.      compact(ebw, r, 1)
+7.  END IF
+```
+
+TRY-TWICE-COMPACT runs the following algorithms as subroutines. 
+
+## Algorithm 5: IS-COMPACTIBLE
+
+**Input:** None (uses instance variables)
+
+**Output:** Boolean
+
+```
+1.  // Get compaction parameters
+2.  utilization_div ← 10           // Default divisor
+3.  utilization_ratio ← 7          // Default ratio
+4.  compact_thres ← 20000000       // Minimum entry threshold
+5.  active_count ← get_active_entry_count()
+6.  total_count ← sn_end - sn_start
+7.  
+8.  // Check minimum entry threshold
+9.  IF active_count < compact_thres THEN
+10.     RETURN false
+11. END IF
+12. 
+13. // Check utilization ratio
+14. // Formula: active_count / total_count < utilization_ratio / utilization_div
+15. // Default: active_count / total_count < 7/10 = 0.7
+16. is_good_utilization ← (total_count × utilization_ratio) < (active_count × utilization_div)
+17. 
+18. RETURN NOT is_good_utilization
+```
+
+## Algorithm 6: COMPACT
+
+**Input:** `ebw` (Entry Buffer Writer Guard), `r` (Optional Operation Record), `comp_idx` (Compaction Index)
+
+**Output:** None (void function)
+
+```
+1.  // Find next active entry to compact
+2.  (job, kh) ← LOOP
+3.      job ← compact_consumer.consume()
+4.      entry_bz ← EntryBz { bz: job.entry_bz }
+5.      kh ← entry_bz.key_hash()
+6.      
+7.      // Check if entry is still active
+8.      IF is_active_entry(kh, job.old_pos, entry_bz.serial_number()) THEN
+9.          BREAK (job, kh)
+10.     END IF
+11.     
+12.     // Return inactive entry to queue
+13.     compact_consumer.send_returned(job)
+14. END LOOP
+15. 
+16. // Create new entry with updated serial number
+17. new_entry ← Entry {
+18.     key: entry_bz.key(),
+19.     value: entry_bz.value(),
+20.     next_key_hash: entry_bz.next_key_hash(),
+21.     version: entry_bz.version(),
+22.     serial_number: sn_end
+23. }
+24. 
+25. // Prepare deactivation list
+26. dsn_list ← [entry_bz.serial_number()]
+27. 
+28. // Append new entry to storage
+29. new_pos ← ebw.append(new_entry, dsn_list)
+30. 
+31. // Update entry position mapping
+32. update_entry_position(kh, job.old_pos, new_pos, dsn_list[0], sn_end)
+33. 
+34. // Update metadata
+35. sn_end ← sn_end + 1
+36. sn_start ← entry_bz.serial_number() + 1
+37. compact_done_pos ← job.old_pos + entry_bz.len()
+38. 
+39. // Return job to queue for reuse
+40. compact_consumer.send_returned(job)
+```
+
+## Algorithm 7: IS-ACTIVE-ENTRY
+
+**Input:** `key_hash`, `file_pos`, `serial_number`
+
+**Output:** Boolean
+
+```
+1.  // Check if entry exists with matching position and serial number
+2.  RETURN entry_exists_at_position(key_hash, file_pos, serial_number)
+```
+
+# 4. How QMDB can guarantee the Linked List Invariant:
 
 QMDB maintains linked list invariant, which is defined as follows:
 
@@ -375,7 +449,7 @@ entry_i.next_key_hash = entry_j.key_hash
 
 
 This invariant is maintained through:
-## 1. Predicate-based insertion ensuring correct positioning
+## 4.1. Predicate-based insertion ensuring correct positioning
 The key mechanism is in the `read_previous_entry` function with its predicate:
 
 ```rust
@@ -394,7 +468,7 @@ This predicate ensures:
 - `entry.key_hash() < *key_hash`: The found entry comes before the new key
 - `&key_hash[..] < entry.next_key_hash()`: The new key comes before what the entry currently points to
   
-## 2. Atomic linked list updates preserving connectivity
+## 4.2. Atomic linked list updates preserving connectivity
 
 For any three consecutive entries `A`, `B`, `C` in the linked list:
 
@@ -435,7 +509,7 @@ A.next_key_hash = C.key_hash
 C.next_key_hash = D.key_hash
 ```
 
-## 3. Append-only operations preventing structural corruption
+## 4.3. Append-only operations preventing structural corruption
 ### A. Append-Only Design
 
 The append-only nature ensures:
@@ -452,7 +526,7 @@ Each mutation operation is atomic:
 
 This ensures the linked list is always in a consistent state.
 
-## 4. Index consistency
+## 4.4. Index consistency
 
 The index maintains consistency with the linked list:
 ```
