@@ -436,9 +436,9 @@ TRY-TWICE-COMPACT runs the following algorithms as subroutines.
 2.  RETURN entry_exists_at_position(key_hash, file_pos, serial_number)
 ```
 
-# 4. How QMDB can guarantee the Linked List Invariant:
+# 4. How QMDB guarantees the Linked List Invariant:
 
-QMDB maintains linked list invariant, which is defined as follows:
+QMDB maintains the linked list invariant, which is defined as follows:
 
 QMDB maintains a sorted linked list where each entry contains a `next_key_hash` field that points to the next entry in lexicographic order. The invariant states:
 
@@ -540,3 +540,41 @@ self.indexer.change_kv(
 );
 ```
 The indices are updated to reflect the new positions in time. 
+
+# 4. How QMDB guarantees Temporal Verifiability Invariant:
+
+QMDB maintains the Temporal Verifiability Invariant, which is defined as follows:
+
+```
+∀ entry ∈ σ, ∀ time t: ∃ verification_procedure(entry, t) → {active, inactive}
+```
+
+
+The invariant is maintained because:
+
+1. **Existence**: Every entry has a unique serial number and version
+2. **Deactivation**: Deactivated entries are explicitly tracked in DSN lists
+3. **Indexing**: Active entries are tracked in real-time index
+4. **Temporal**: Version numbers provide temporal ordering
+5. **Cryptographic**: Merkle tree ensures integrity of all state changes
+
+One can run the following verification algorithm to check the active state of any entry. 
+
+**Verification Algorithm**
+```
+verify_active(entry, time) {
+    // Check if entry existed at time
+    if (entry.version > time) return inactive
+    
+    // Check if entry was deactivated before time
+    if (entry.serial_number ∈ deactivated_before_time(time)) return inactive
+    
+    return active
+}
+```
+
+Note that the verification algorithm is based on the Unique Key Assumption that QMDB guarantees:
+
+```
+∀ entry_i, entry_j ∈ σ: entry_i.key = entry_j.key ⟹ entry_i = entry_j
+```
