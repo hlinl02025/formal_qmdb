@@ -210,6 +210,9 @@ Level 12+: Shard tree nodes
 Level 64: Global root
 ```
 #### The core algorithms of QMDB:
+
+There are mainly three algorithms: CREATE-KV, UPDATE-KV and DELETE-KV
+
 ## Algorithm 1: CREATE-KV
 
 **Input:** `read_entry_buf`, `key_hash`, `key`, `value`, `shard_id`, `version`, `serial_number`, `r`
