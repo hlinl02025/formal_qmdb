@@ -541,7 +541,7 @@ self.indexer.change_kv(
 ```
 The indices are updated to reflect the new positions in time. 
 
-# 4. How QMDB guarantees Temporal Verifiability Invariant:
+# 5. How QMDB guarantees Temporal Verifiability Invariant:
 
 QMDB maintains the Temporal Verifiability Invariant, which is defined as follows:
 
