@@ -7,20 +7,19 @@ Think of an **Entry** as a single record in a filing cabinet, but with some spec
 ### What's Inside Each Entry:
 1. **Key** - The label or identifier
 2. **Value** - The actual data stored
-3. **Next Key Hash** - A pointer to the next entry in alphabetical order
+3. **Next Key Hash** - A pointer to the next entry in alphabetical order by their keys
 4. **Version** - A unique identifier for the transaction that created or modified the entry
-5. **Serial Number** - A unique ID number for this entry within its section
+5. **Serial Number** - A unique ID number for this entry within its shard
 6. **dsn_list** - A list of Deactivated serial numbers
 
 ### Special Properties:
 - **Immutable**: Once written, an entry can never be changed. Instead, a new version is created.
-- **Linked**: Each entry knows which entry comes next in alphabetical order
 - **Sorted**: All entries are automatically kept in alphabetical order by their keys
 
 ### Visual Example:
 ```
-Entry A: Key="apple", Value="red fruit", Next="0x1d3w"
-Entry B: Key="banana", Value="yellow fruit", Next="0x1r36"  
+Entry A: Key="apple", Value="red fruit", Next="0x1d3f"
+Entry B: Key="banana", Value="yellow fruit", Next="0x1e36"  
 Entry C: Key="cherry", Value="red berry", Next="0x12fe"
 ```
 
@@ -122,7 +121,7 @@ The concrete visual structure of Twig as a Mini Merkle Tree can be found in the 
 
 #### **Right Tree (Active Bits Tree)**
 - Tracks which entries are still valid
-- Each leaf represents 8 entries (1 bit per entry)
+- Each leaf represents 8 entries (256 bit per entry)
 - Allows "deletion" without actually removing data
 
 ## 2.4. **How Twigs Connect to Higher Levels**
@@ -193,7 +192,7 @@ Level 64: Global root
 ```
 # 3. The core algorithms of QMDB:
 
-There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and TRY-TWICE-COMPACT. The following are the pseudocodes of these algorithms. 
+There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and COMPACT. The following are the pseudocodes of these algorithms. 
 
 
 ## Algorithm 1: CREATE-KV
@@ -331,52 +330,7 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and TRY-TWICE
 38. }
 ```
 
-## Algorithm 4: TRY-TWICE-COMPACT
-
-**Input:** `ebw` (Entry Buffer Writer Guard), `r` (Optional Operation Record)
-
-**Output:** None (void function)
-
-```
-1.  // Check if compaction should be triggered
-2.  IF is_compactible() THEN
-3.      // Perform first compaction pass
-4.      compact(ebw, r, 0)
-5.      // Perform second compaction pass
-6.      compact(ebw, r, 1)
-7.  END IF
-```
-
-TRY-TWICE-COMPACT runs the following algorithms as subroutines. 
-
-## Algorithm 5: IS-COMPACTIBLE
-
-**Input:** None (uses instance variables)
-
-**Output:** Boolean
-
-```
-1.  // Get compaction parameters
-2.  utilization_div ← 10           // Default divisor
-3.  utilization_ratio ← 7          // Default ratio
-4.  compact_thres ← 20000000       // Minimum entry threshold
-5.  active_count ← get_active_entry_count()
-6.  total_count ← sn_end - sn_start
-7.  
-8.  // Check minimum entry threshold
-9.  IF active_count < compact_thres THEN
-10.     RETURN false
-11. END IF
-12. 
-13. // Check utilization ratio
-14. // Formula: active_count / total_count < utilization_ratio / utilization_div
-15. // Default: active_count / total_count < 7/10 = 0.7
-16. is_good_utilization ← (total_count × utilization_ratio) < (active_count × utilization_div)
-17. 
-18. RETURN NOT is_good_utilization
-```
-
-## Algorithm 6: COMPACT
+## Algorithm 4: COMPACT
 
 **Input:** `ebw` (Entry Buffer Writer Guard), `r` (Optional Operation Record), `comp_idx` (Compaction Index)
 
@@ -425,17 +379,6 @@ TRY-TWICE-COMPACT runs the following algorithms as subroutines.
 40. compact_consumer.send_returned(job)
 ```
 
-## Algorithm 7: IS-ACTIVE-ENTRY
-
-**Input:** `key_hash`, `file_pos`, `serial_number`
-
-**Output:** Boolean
-
-```
-1.  // Check if entry exists with matching position and serial number
-2.  RETURN entry_exists_at_position(key_hash, file_pos, serial_number)
-```
-
 # 4. How QMDB guarantees the Linked List Invariant:
 
 QMDB maintains the linked list invariant, which is defined as follows:
@@ -479,7 +422,7 @@ A.next_key_hash = B.key_hash
 B.next_key_hash = C.key_hash
 ```
 
-### Create Operation Proof
+### Create Operation 
 
 When inserting entry `X` between `A` and `B`:
 
@@ -495,7 +438,7 @@ X.next_key_hash = B.key_hash
 B.next_key_hash = C.key_hash
 ```
 
-### Delete Operation Proof
+### Delete Operation 
 
 When deleting entry `B` between `A` and `C`:
 
@@ -528,26 +471,15 @@ This ensures the linked list is always in a consistent state.
 
 ## 4.4. Index consistency
 
-The index maintains consistency with the linked list:
-```
-self.indexer.add_kv(&key_hash[..], create_pos, serial_number);
-self.indexer.change_kv(
-    &prev_entry.key_hash()[..10],
-    old_pos,
-    new_pos,
-    prev_entry.serial_number(),
-    serial_number + 1,
-);
-```
-The indices are updated to reflect the new positions in time. 
+The index maintains consistency with the linked list, the indices are updated to reflect the new positions in time. 
 
 # 5. How QMDB guarantees Temporal Verifiability Invariant:
 
 QMDB maintains the Temporal Verifiability Invariant, which is defined as follows:
 
-```
+
 ∀ entry ∈ σ, ∀ time t: ∃ verification_procedure(entry, t) → {active, inactive}
-```
+
 
 
 The invariant is maintained because:
@@ -567,7 +499,7 @@ verify_active(entry, time) {
     if (entry.version > time) return inactive
     
     // Check if entry was deactivated before time
-    if (entry.serial_number ∈ deactivated_before_time(time)) return inactive
+    if (entry.serial_number $\in$ deactivated_before_time(time)) return inactive
     
     return active
 }
@@ -575,6 +507,5 @@ verify_active(entry, time) {
 
 Note that the verification algorithm is based on the Unique Key Assumption that QMDB guarantees:
 
-```
-∀ entry_i, entry_j ∈ σ: entry_i.key = entry_j.key ⟹ entry_i = entry_j
-```
+$$\forall \text{entry}_i, \text{entry}_j \in \sigma: \text{entry}_i.\text{key} = \text{entry}_j.\text{key} \implies \text{entry}_i = \text{entry}_j$$
+
