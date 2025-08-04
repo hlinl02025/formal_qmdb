@@ -208,13 +208,13 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and COMPACT. 
 4.  // Find previous entry in sorted key space
 5.  old_pos ← storage.read_previous_entry(height, key_hash, read_entry_buf, 
 6.      predicate: entry.key_hash < key_hash ∧ key_hash < entry.next_key_hash)
-7.  prev_entry ← read_entry_buf.as_entry_bz()
+7.  prev_entry ← read_entry_buf.as_entry_bz
 8.  
 9.  // Create new entry inheriting next pointer
 10. new_entry ← Entry {
 11.     key: key,
 12.     value: value,
-13.     next_key_hash: prev_entry.next_key_hash(),
+13.     next_key_hash: prev_entry.next_key_hash,
 14.     version: version,
 15.     serial_number: serial_number
 16. }
@@ -223,21 +223,21 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and COMPACT. 
 19. 
 20. // Update previous entry to point to new entry
 21. prev_changed ← Entry {
-22.     key: prev_entry.key(),
-23.     value: prev_entry.value(),
+22.     key: prev_entry.key,
+23.     value: prev_entry.value,
 24.     next_key_hash: key_hash,
 25.     version: version,
 26.     serial_number: serial_number + 1
 27. }
-28. dsn_list ← [prev_entry.serial_number()]
+28. dsn_list ← [prev_entry.serial_number]
 29. new_pos ← storage.append_entry(prev_changed, dsn_list)
 30. 
 31. // Update entry position mappings
 32. add_entry_position(key_hash, create_pos, serial_number)
 33. update_entry_position(prev_entry.key_hash[0:10], old_pos, new_pos, 
-34.     prev_entry.serial_number(), serial_number + 1)
+34.     prev_entry.serial_number, serial_number + 1)
 35. 
-36. storage.try_twice_compact()
+36. storage.try_twice_compact
 37. 
 38. RETURN EntryMutationResult {
 39.     num_active: 2,
@@ -258,24 +258,24 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and COMPACT. 
 4.  // Find existing entry to update
 5.  old_pos ← storage.read_prior_entry(height, key_hash, read_entry_buf,
 6.      predicate: entry.key == key)
-7.  old_entry ← read_entry_buf.as_entry_bz()
+7.  old_entry ← read_entry_buf.as_entry_bz
 8.  
 9.  // Create updated version
 10. new_entry ← Entry {
 11.     key: key,
 12.     value: value,
-13.     next_key_hash: old_entry.next_key_hash(),
+13.     next_key_hash: old_entry.next_key_hash,
 14.     version: version,
 15.     serial_number: serial_number
 16. }
-17. dsn_list ← [old_entry.serial_number()]
+17. dsn_list ← [old_entry.serial_number]
 18. new_pos ← storage.append_entry(new_entry, dsn_list)
 19. 
 20. // Update entry position mapping
 21. update_entry_position(key_hash, old_pos, new_pos,
-22.     old_entry.serial_number(), serial_number)
+22.     old_entry.serial_number, serial_number)
 23. 
-24. storage.try_twice_compact()
+24. storage.try_twice_compact
 25. 
 26. RETURN EntryMutationResult {
 27.     num_active: 1,
@@ -295,34 +295,34 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and COMPACT. 
 3.  // Find entry to delete
 4.  del_entry_pos ← storage.read_prior_entry(height, key_hash, read_entry_buf,
 5.      predicate: entry.key == key)
-6.  del_entry ← read_entry_buf.as_entry_bz()
-7.  del_entry_sn ← del_entry.serial_number()
-8.  old_next_key_hash ← del_entry.next_key_hash()
+6.  del_entry ← read_entry_buf.as_entry_bz
+7.  del_entry_sn ← del_entry.serial_number
+8.  old_next_key_hash ← del_entry.next_key_hash
 9. 
 10. // Find previous entry in linked list
-11. read_entry_buf.clear()
+11. read_entry_buf.clear
 12. prev_pos ← storage.read_previous_entry(height, key_hash, read_entry_buf,
 13.     predicate: entry.next_key_hash == key_hash)
-14. prev_entry ← read_entry_buf.as_entry_bz()
+14. prev_entry ← read_entry_buf.as_entry_bz
 15. 
 16. // Update previous entry to skip deleted entry
 17. prev_changed ← Entry {
-18.     key: prev_entry.key(),
-19.     value: prev_entry.value(),
+18.     key: prev_entry.key,
+19.     value: prev_entry.value,
 20.     next_key_hash: old_next_key_hash,
 21.     version: version,
 22.     serial_number: serial_number
 23. }
-24. dsn_list ← [del_entry_sn, prev_entry.serial_number()]
+24. dsn_list ← [del_entry_sn, prev_entry.serial_number]
 25. new_pos ← storage.append_entry(prev_changed, dsn_list)
 26. 
 27. // Update entry position mappings
 28. remove_entry_position(key_hash, del_entry_pos, del_entry_sn)
 29. k80 ← prev_entry.key_hash[0:10]
 30. update_entry_position(k80, prev_pos, new_pos,
-31.     prev_entry.serial_number(), serial_number)
+31.     prev_entry.serial_number, serial_number)
 32. 
-33. storage.try_twice_compact()
+33. storage.try_twice_compact
 34. 
 35. RETURN EntryMutationResult {
 36.     num_active: 1,
@@ -341,10 +341,10 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and COMPACT. 
 2.  (job, kh) ← LOOP
 3.      job ← compact_consumer.consume()
 4.      entry_bz ← EntryBz { bz: job.entry_bz }
-5.      kh ← entry_bz.key_hash()
+5.      kh ← entry_bz.key_hash
 6.      
 7.      // Check if entry is still active
-8.      IF is_active_entry(kh, job.old_pos, entry_bz.serial_number()) THEN
+8.      IF is_active_entry(kh, job.old_pos, entry_bz.serial_number) THEN
 9.          BREAK (job, kh)
 10.     END IF
 11.     
@@ -354,15 +354,15 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and COMPACT. 
 15. 
 16. // Create new entry with updated serial number
 17. new_entry ← Entry {
-18.     key: entry_bz.key(),
-19.     value: entry_bz.value(),
-20.     next_key_hash: entry_bz.next_key_hash(),
-21.     version: entry_bz.version(),
+18.     key: entry_bz.key,
+19.     value: entry_bz.value,
+20.     next_key_hash: entry_bz.next_key_hash,
+21.     version: entry_bz.version,
 22.     serial_number: sn_end
 23. }
 24. 
 25. // Prepare deactivation list
-26. dsn_list ← [entry_bz.serial_number()]
+26. dsn_list ← [entry_bz.serial_number]
 27. 
 28. // Append new entry to storage
 29. new_pos ← ebw.append(new_entry, dsn_list)
@@ -372,8 +372,8 @@ There are mainly three algorithms: CREATE-KV, UPDATE-KV, DELETE-KV and COMPACT. 
 33. 
 34. // Update metadata
 35. sn_end ← sn_end + 1
-36. sn_start ← entry_bz.serial_number() + 1
-37. compact_done_pos ← job.old_pos + entry_bz.len()
+36. sn_start ← entry_bz.serial_number + 1
+37. compact_done_pos ← job.old_pos + entry_bz.len
 38. 
 39. // Return job to queue for reuse
 40. compact_consumer.send_returned(job)
@@ -395,7 +395,7 @@ This invariant is maintained through:
 ## 4.1. Predicate-based insertion ensuring correct positioning
 The key mechanism is in the `read_previous_entry` function with its predicate:
 
-```rust
+```
 // In create_kv function
 let old_pos = self.storage.read_previous_entry(
     height, 
